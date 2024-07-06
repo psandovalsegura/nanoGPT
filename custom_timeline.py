@@ -31,7 +31,7 @@ def custom_memory_timeline(
     max_memory_reserved = torch.cuda.max_memory_reserved(device)
 
     # Plot memory timeline as stacked data
-    fig = plt.figure(figsize=figsize, dpi=80)
+    fig = plt.figure(figsize=figsize, dpi=200)
     axes = fig.gca()
     ignore_categories = [eval(i) for i in ignore_categories] if ignore_categories else []
     plot_categories = {
