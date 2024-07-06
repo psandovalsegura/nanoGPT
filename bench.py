@@ -33,11 +33,6 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-def log_mem(desc):
-    mem = torch.cuda.memory_allocated()
-    print(f"==> {desc}: {readable_size(mem)}")
-
-
 # data loading init
 if real_data:
     dataset = 'openwebtext'
@@ -88,17 +83,11 @@ if profile:
     file_prefix = f"{filename}_{timestamp}"
     os.makedirs(LOG_DIR, exist_ok=True)
     def trace_handler(prof: torch.profiler.profile):
-        # Construct the trace file.
-        # prof.export_chrome_trace(f"{LOG_DIR}/{file_prefix}.json.gz")
-
-        # Construct the memory timeline file.
-        # prof.export_memory_timeline(f"{LOG_DIR}/{file_prefix}.html", device="cuda:0")
+        # Construct the memory timeline image.
         custom_memory_timeline(profile=prof, 
                             path=f"{LOG_DIR}/{file_prefix}",
                             device_str="cuda:0",
                             ignore_categories=None)
-                            # ignore_categories=['None'])
-                            # ignore_categories=['None', 'Category.PARAMETER', 'Category.OPTIMIZER_STATE', 'Category.INPUT', 'Category.TEMPORARY', 'Category.AUTOGRAD_DETAIL', 'Category.GRADIENT'])   
 
     with torch.profiler.profile(
         activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
@@ -110,23 +99,17 @@ if profile:
         with_flops=True,
         with_modules=False, # only for torchscript models atm
     ) as prof:
-        # log_mem("Before get batch")
+        
         X, Y = get_batch('train')
-        # log_mem("After get batch")
         for k in range(num_steps):
             with ctx:
-                # log_mem(f"Step {k} before forward")
                 logits, loss = model(X, Y)
-                # log_mem(f"Step {k} after forward")
             X, Y = get_batch('train')
             optimizer.zero_grad(set_to_none=True)
-            # log_mem(f"Step before backward")
             loss.backward()
-            # log_mem(f"Step after backward")
             optimizer.step()
-            # log_mem(f"Step after optim step")
             lossf = loss.item()
-            # print(f"{k}/{num_steps} loss: {lossf:.4f}")
+            print(f"{k}/{num_steps} loss: {lossf:.4f}")
 
             prof.step() # notify the profiler at end of each step
 
