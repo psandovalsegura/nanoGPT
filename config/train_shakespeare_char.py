@@ -1,7 +1,7 @@
 # train a miniature character-level shakespeare model
 # good for debugging and playing on macbooks and such
 
-out_dir = 'out-shakespeare-char'
+out_dir = '/fs/vulcan-projects/stereo-detection/nanoGPT-experiments/out-shakespeare-char'
 eval_interval = 250 # keep frequent because we'll overfit
 eval_iters = 200
 log_interval = 10 # don't print too too often
@@ -9,7 +9,7 @@ log_interval = 10 # don't print too too often
 # we expect to overfit on this small dataset, so only save when val improves
 always_save_checkpoint = False
 
-wandb_log = False # override via command line if you like
+wandb_log = True # override via command line if you like
 wandb_project = 'shakespeare-char'
 wandb_run_name = 'mini-gpt'
 
