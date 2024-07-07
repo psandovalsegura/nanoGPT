@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 
 # -----------------------------------------------------------------------------
+debug = False
 
 class ActivationStrategy(ABC):
     @abstractmethod
@@ -26,14 +27,23 @@ class TopKActivation(ActivationStrategy):
     def get_hooks(self) -> Tuple[Callable, Callable]:
         def pack_hook(tensor: torch.Tensor) -> Any:
             # Packs tensor as (values, indices, original_size)
+            # unless num elements < k then just pack the tensor
+            if tensor.numel() <= self.k:
+                return tensor
             original_size = tensor.size()
+            if debug: print(f"Packing tensor of size {original_size}")
             flat_tensor = tensor.flatten()
             values, indices = torch.topk(flat_tensor, self.k)
             return (values, indices, original_size)
 
         def unpack_hook(packed_tesor: Any) -> torch.Tensor:
+            # Unpacks tensor from (values, indices, original_size)
+            # unless packed tensor is a tensor then just return it
+            if isinstance(packed_tesor, torch.Tensor):
+                return packed_tesor
             values, indices, original_size = packed_tesor
-            tensor = torch.zeros(original_size, device=values.device)
+            if debug: print(f"Unpacking tensor of size {original_size}")
+            tensor = torch.zeros(original_size, dtype=values.dtype, device=values.device)
             tensor.put_(indices, values)
             return tensor
 
@@ -61,11 +71,18 @@ def apply_activation_strategy(model: nn.Module, strategy: ActivationStrategy, ch
             self.module = module
 
         def forward(self, *args, **kwargs):
+            if debug: print("Calling wrapper forward")
             with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook):
                 return self.module(*args, **kwargs)
 
-    named_modules = list(model.named_modules())
-    for name, module in named_modules:
-        if check_fn(module):
-            setattr(model, name, ActivationStrategyWrapper(module))
-    
+    # GPT contains nn.ModuleDict which we cannot mutate during iteration
+    _recursively_wrap(model, ActivationStrategyWrapper, check_fn)
+
+    if debug: print(f"Wrapped {sum(1 for m in model.modules() if isinstance(m, ActivationStrategyWrapper))} modules")
+
+def _recursively_wrap(module: nn.Module, wrapper: nn.Module, check_fn: Callable):
+    for name, submodule in module.named_children():
+        if check_fn(submodule):
+            setattr(module, name, wrapper(submodule))
+        else:
+            _recursively_wrap(submodule, wrapper, check_fn)
