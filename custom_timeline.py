@@ -52,8 +52,8 @@ def custom_memory_timeline(
     title = "\n\n".join(
         ([title] if title else [])
         + [
-            f"Max memory allocated: {max_memory_allocated/(1024**3):.2f} GiB \n"
-            f"Max memory reserved: {max_memory_reserved/(1024**3):.2f} GiB"
+            f"Max Allocated: {max_memory_allocated/(1024**3):.2f} GiB    "
+            f"Max Reserved: {max_memory_reserved/(1024**3):.2f} GiB"
         ]
     )
     axes.set_title(title)

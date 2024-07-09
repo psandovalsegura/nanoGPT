@@ -2,6 +2,7 @@ from typing import Tuple, Callable, Any
 from abc import ABC, abstractmethod
 import torch
 import torch.nn as nn
+from pytorch_memlab.utils import readable_size
 
 # -----------------------------------------------------------------------------
 debug = False
@@ -31,7 +32,7 @@ class TopKActivation(ActivationStrategy):
             if tensor.numel() <= self.k:
                 return tensor
             original_size = tensor.size()
-            if debug: print(f"Packing tensor of size {original_size}")
+            if debug: print(f"Packing tensor of size {original_size} ({readable_size(tensor.numel() * tensor.element_size())})")
             flat_tensor = tensor.flatten()
             values, indices = torch.topk(flat_tensor, self.k)
             return (values, indices, original_size)
@@ -42,9 +43,9 @@ class TopKActivation(ActivationStrategy):
             if isinstance(packed_tesor, torch.Tensor):
                 return packed_tesor
             values, indices, original_size = packed_tesor
-            if debug: print(f"Unpacking tensor of size {original_size}")
             tensor = torch.zeros(original_size, dtype=values.dtype, device=values.device)
             tensor.put_(indices, values)
+            if debug: print(f"Unpacked tensor of size {original_size} ({readable_size(tensor.numel() * tensor.element_size())})")
             return tensor
 
         return pack_hook, unpack_hook

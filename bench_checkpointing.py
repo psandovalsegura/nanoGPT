@@ -34,7 +34,8 @@ seed = 1337
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
 compile = False # use PyTorch 2.0 to compile the model to be faster
-profile = True # use pytorch profiler, or just simple benchmarking?
+profile = True # use pytorch profiler, or else generate a snapshot
+log_dir = "./bench_log"
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
 
@@ -47,6 +48,8 @@ def init_distributed(rank: int, world_size: int, master_addr: str = 'localhost',
 
 init_distributed(0, 1)
 
+if not profile:
+    torch.cuda.memory._record_memory_history(max_entries=100_000)
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
@@ -54,6 +57,11 @@ torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+time_format_str: str = "%b_%d_%H_%M_%S"
+filename = f"checkpoint_batch_{batch_size}_block_{block_size}"
+timestamp = datetime.now().strftime(time_format_str)
+filename = f"{filename}_{timestamp}"
+os.makedirs(log_dir, exist_ok=True)
 
 # data loading init
 if real_data:
@@ -90,7 +98,8 @@ def get_block_class_from_model(model: torch.nn.Module, block_class_name: str) ->
             return module.__class__
     raise ValueError(f"Could not find block class {block_class_name} in model {model}")
 
-wrap_class = get_block_class_from_model(model, 'Block')
+wrap_class_str = 'Block'
+wrap_class = get_block_class_from_model(model, wrap_class_str)
 model_auto_wrap_policy = functools.partial(transformer_auto_wrap_policy, transformer_layer_cls={wrap_class},)
 rank = 0
 shared_fsdp_kwargs = dict(
@@ -147,18 +156,15 @@ if profile:
     num_steps = wait + warmup + active
 
     # trace handler from: https://pytorch.org/blog/understanding-gpu-memory-1/?ref=alexdremov.me
-    TIME_FORMAT_STR: str = "%b_%d_%H_%M_%S"
-    LOG_DIR = "./bench_log"
-    # Prefix for file names.
-    filename = f"ac_bench_batch_{batch_size}_block_{block_size}"
-    timestamp = datetime.now().strftime(TIME_FORMAT_STR)
-    file_prefix = f"{filename}_{timestamp}"
-    os.makedirs(LOG_DIR, exist_ok=True)
     def trace_handler(prof: torch.profiler.profile):
         # Construct the memory timeline image.
+        env_title = f"torch version: {torch.__version__}, torch.compile: {compile}"
+        title = f"Checkpointing at {wrap_class_str} Modules" \
+                f"\n{env_title}"
         custom_memory_timeline(profile=prof, 
-                            path=f"{LOG_DIR}/{file_prefix}",
+                            path=f"{log_dir}/{filename}",
                             device_str="cuda:0",
+                            title=title,
                             ignore_categories=None)
 
     with torch.profiler.profile(
@@ -175,11 +181,10 @@ if profile:
         X, Y = get_batch('train')
         for k in range(num_steps):
             with ctx:
-                logits, loss = model(X, Y)
-            X, Y = get_batch('train')
-            optimizer.zero_grad(set_to_none=True)
+                loss = model(X, Y)[1]
             loss.backward()
             optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
             lossf = loss.item()
             print(f"{k}/{num_steps} loss: {lossf:.4f}")
 
@@ -187,23 +192,25 @@ if profile:
 
 else:
 
-    # simple benchmarking
-    torch.cuda.synchronize()
-    for stage, num_steps in enumerate([10, 20]): # burnin, then benchmark
-        t0 = time.time()
-        X, Y = get_batch('train')
-        for k in range(num_steps):
-            with ctx:
-                logits, loss = model(X, Y)
-            X, Y = get_batch('train')
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            optimizer.step()
-            lossf = loss.item()
-            print(f"{k}/{num_steps} loss: {lossf:.4f}")
-        torch.cuda.synchronize()
-        t1 = time.time()
-        dt = t1-t0
-        mfu = model.estimate_mfu(batch_size * 1 * num_steps, dt)
-        if stage == 1:
-            print(f"time per iteration: {dt/num_steps*1000:.4f}ms, MFU: {mfu*100:.2f}%")
+    # generate snapshot
+    wait, warmup, active = 1, 1, 1
+    num_steps = wait + warmup + active
+
+    X, Y = get_batch('train')
+    for k in range(num_steps):
+        with ctx:
+            loss = model(X, Y)[1]
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        lossf = loss.item()
+        print(f"{k}/{num_steps} loss: {lossf:.4f}")
+
+    # Save memory snapshot
+    try:
+       torch.cuda.memory._dump_snapshot(f"{log_dir}/{filename}.pickle")
+    except Exception as e:
+        print(f"Failed to capture memory snapshot {e}")
+
+    # Stop recording memory snapshot history.
+    torch.cuda.memory._record_memory_history(enabled=None)
