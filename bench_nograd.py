@@ -134,13 +134,14 @@ else:
 
     X, Y = get_batch('train')
     for k in range(num_steps):
-        with ctx:
-            loss = model(X, Y)[1]
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad(set_to_none=True)
-        lossf = loss.item()
-        print(f"{k}/{num_steps} loss: {lossf:.4f}")
+        with torch.no_grad():
+            with ctx:
+                loss = model(X, Y)[1]
+            # loss.backward()
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            lossf = loss.item()
+            print(f"{k}/{num_steps} loss: {lossf:.4f}")
 
     # Save memory snapshot
     try:
