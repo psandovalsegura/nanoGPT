@@ -1,5 +1,5 @@
 """
-A much shorter version of train.py for benchmarking with activation checkpointing
+A much shorter version of train.py for benchmarking
 """
 import os
 from contextlib import nullcontext
@@ -11,8 +11,6 @@ from datetime import datetime
 from torch.autograd.profiler import record_function
 from pytorch_memlab.utils import readable_size
 from custom_timeline import custom_memory_timeline
-
-import functools
 
 # -----------------------------------------------------------------------------
 batch_size = 128
@@ -38,7 +36,7 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 time_format_str: str = "%b_%d_%H_%M_%S"
-filename = f"checkpoint_batch_{batch_size}_block_{block_size}"
+filename = f"nograd_batch_{batch_size}_block_{block_size}"
 timestamp = datetime.now().strftime(time_format_str)
 filename = f"{filename}_{timestamp}"
 os.makedirs(log_dir, exist_ok=True)
@@ -71,39 +69,15 @@ gptconf = GPTConfig(
 model = GPT(gptconf)
 model.to(device)
 
-def get_block_class_from_model(model: torch.nn.Module, block_class_name: str) -> torch.nn.Module:
-    """Get the class of a block from a model, using the block's class name."""
-    for module in model.modules():
-        if module.__class__.__name__ == block_class_name:
-            return module.__class__
-    raise ValueError(f"Could not find block class {block_class_name} in model {model}")
-
-wrap_class_str = 'Block'
-wrap_class = get_block_class_from_model(model, wrap_class_str)
-
-try:
-    # use activation checkpointing, according to:
-    # https://pytorch.org/blog/scaling-multimodal-foundation-models-in-torchmultimodal-with-pytorch-distributed/
-    #
-    # first, verify we have FSDP activation support ready by importing:
-    from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
-        checkpoint_wrapper,
-        apply_activation_checkpointing,
-        CheckpointImpl,
-    )
-    non_reentrant_wrapper = functools.partial(
-        checkpoint_wrapper,
-        checkpoint_impl=CheckpointImpl.NO_REENTRANT,
-    )
-except Exception as e:
-    print('Activation checkpointing not available:', e)
-else:
-    check_fn = lambda submodule: isinstance(submodule, wrap_class)
-    print('Applying activation checkpointing wrapper to policy...')
-    apply_activation_checkpointing(model, checkpoint_wrapper_fn=non_reentrant_wrapper, check_fn=check_fn)
-    print('Activation checkpointing enabled!')
-
 optimizer = model.configure_optimizers(weight_decay=1e-2, learning_rate=1e-4, betas=(0.9, 0.95), device_type=device_type)
+
+# because optimizer will not initialize in no_grad env, we create a tensor of the same size
+# adamw uses 8 bytes for each parameter
+# num_model_params = model.get_num_params(non_embedding=False)
+# optimizer_tensor = torch.randn(num_model_params * 8, dtype=torch.float32, device=device)
+# model.synthetic_optimizer_tensor = optimizer_tensor
+# print(f"Using {readable_size(num_model_params * 8)} for substitute optimizer state")
+optimizer.load_state_dict(torch.load(f"optimizer_batch_{batch_size}_block_{block_size}.pth"))
 
 if compile:
     print("Compiling model...")
@@ -120,7 +94,7 @@ if profile:
     def trace_handler(prof: torch.profiler.profile):
         # Construct the memory timeline image.
         env_title = f"torch version: {torch.__version__}, torch.compile: {compile}"
-        title = f"Checkpointing at {wrap_class_str} Modules" \
+        title = f"No Grad Iterations" \
                 f"\n{env_title}"
         custom_memory_timeline(profile=prof, 
                             path=f"{log_dir}/{filename}",
@@ -138,22 +112,19 @@ if profile:
         with_flops=True,
         with_modules=False, # only for torchscript models atm
     ) as prof:
-        
+
         X, Y = get_batch('train')
         for k in range(num_steps):
-            with ctx:
-                loss = model(X, Y)[1]
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-            lossf = loss.item()
-            print(f"{k}/{num_steps} loss: {lossf:.4f}")
+            with torch.no_grad():
+                with ctx:
+                    loss = model(X, Y)[1]
+                # loss.backward()
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                lossf = loss.item()
+                print(f"{k}/{num_steps} loss: {lossf:.4f}")
 
-            prof.step() # notify the profiler at end of each step
-
-            # save state dict of optimizer
-            if k == 14:
-                torch.save(optimizer.state_dict(), f"optimizer_batch_{batch_size}_block_{block_size}.pth")
+                prof.step() # notify the profiler at end of each step
 
 else:
 
