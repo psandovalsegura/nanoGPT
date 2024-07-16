@@ -6,6 +6,7 @@ from contextlib import nullcontext
 import numpy as np
 import time
 import torch
+import torch.nn as nn
 from model import GPTConfig, GPT
 from datetime import datetime
 from torch.autograd.profiler import record_function
@@ -16,7 +17,6 @@ from custom_timeline import custom_memory_timeline
 batch_size = 128
 block_size = 128
 bias = False
-real_data = False
 seed = 1337
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
@@ -36,44 +36,32 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 time_format_str: str = "%b_%d_%H_%M_%S"
-filename = f"standard_batch_{batch_size}_block_{block_size}"
+filename = f"linearce_batch_{batch_size}_block_{block_size}"
 timestamp = datetime.now().strftime(time_format_str)
 filename = f"{filename}_{timestamp}"
 os.makedirs(log_dir, exist_ok=True)
 
 # data loading init
-if real_data:
-    dataset = 'openwebtext'
-    data_dir = os.path.join('data', dataset)
-    train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    def get_batch(split):
-        data = train_data # note ignore split in benchmarking script
-        ix = torch.randint(len(data) - block_size, (batch_size,))
-        x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-        y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
-        return x, y
-else:
-    # alternatively, if fixed data is desired to not care about data loading
-    x = torch.randint(50304, (batch_size, block_size), device=device)
-    y = torch.randint(50304, (batch_size, block_size), device=device)
-    get_batch = lambda split: (x, y)
+n_embd = 768
+vocab_size = 50304
+x = torch.randn(batch_size, block_size, n_embd).to(ptdtype).to(device)
+y = torch.randint(vocab_size, (batch_size, block_size), device=device)
+get_batch = lambda split: (x, y)
 
 # model init
-gptconf = GPTConfig(
-    block_size = block_size, # how far back does the model look? i.e. context size
-    n_layer = 12, n_head = 12, n_embd = 768, # size of the model
-    dropout = 0, # for determinism
-    bias = bias,
-)
-model = GPT(gptconf)
-model.to(device)
+model = nn.Linear(n_embd, 50304).to(ptdtype).to(device)
+optimizer = torch.optim.SGD(model.parameters(), lr=1.0)
+loss_fn = nn.CrossEntropyLoss()
 
-optimizer = model.configure_optimizers(weight_decay=1e-2, learning_rate=1e-4, betas=(0.9, 0.95), device_type=device_type)
+def f(m, x, label):
+    linear_outputs = m(x)
+    linear_outputs_reshaped = linear_outputs.view(-1, vocab_size)
+    label_reshaped = label.view(-1)
+    return loss_fn(linear_outputs_reshaped, label_reshaped)
 
 if compile:
     print("Compiling model...")
-    model = torch.compile(model) # pytorch 2.0
+    f = torch.compile(f)
 
 if profile:
     # useful docs on pytorch profiler:
@@ -108,7 +96,7 @@ if profile:
         X, Y = get_batch('train')
         for k in range(num_steps):
             with ctx:
-                loss = model(X, Y)
+                loss = f(model, X, Y)
             loss.backward()
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
@@ -126,7 +114,7 @@ else:
     X, Y = get_batch('train')
     for k in range(num_steps):
         with ctx:
-            loss = model(X, Y)
+            loss = f(model, X, Y)
         loss.backward()
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)

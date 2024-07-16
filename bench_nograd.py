@@ -117,7 +117,7 @@ if profile:
         for k in range(num_steps):
             with torch.no_grad():
                 with ctx:
-                    loss = model(X, Y)[1]
+                    loss = model(X, Y)
                 # loss.backward()
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
@@ -136,7 +136,7 @@ else:
     for k in range(num_steps):
         with torch.no_grad():
             with ctx:
-                loss = model(X, Y)[1]
+                loss = model(X, Y)
             # loss.backward()
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)

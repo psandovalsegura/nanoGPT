@@ -15,8 +15,8 @@ from custom_timeline import custom_memory_timeline
 from activation_compression import *
 
 # -----------------------------------------------------------------------------
-batch_size = 12
-block_size = 1024
+batch_size = 128
+block_size = 128
 bias = False
 real_data = False
 seed = 1337
@@ -117,7 +117,7 @@ if profile:
         X, Y = get_batch('train')
         for k in range(num_steps):
             with ctx:
-                loss = model(X, Y)[1]
+                loss = model(X, Y)
             loss.backward()
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
@@ -135,7 +135,7 @@ else:
     X, Y = get_batch('train')
     for k in range(num_steps):
         with ctx:
-            loss = model(X, Y)[1]
+            loss = model(X, Y)
         loss.backward()
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
