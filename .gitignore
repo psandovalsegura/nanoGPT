@@ -10,3 +10,7 @@ __pycache__/
 input.txt
 env/
 venv/
+wandb/
+bench_log/
+scripts/
+2024-*.ipynb

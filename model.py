@@ -177,8 +177,15 @@ class GPT(nn.Module):
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
-        for block in self.transformer.h:
+        for i, block in enumerate(self.transformer.h):
             x = block(x)
+            # uncomment for noisy-activation:
+            # delta = torch.normal(mean=0, std=0.1, size=x.size(), device=device)
+            # x = x + delta
+            # print info:
+            # std, mean = torch.std_mean(x, dim=-1, keepdim=True)
+            # print(f"block {i} std: {std.mean().item():.2f}, mean: {mean.mean().item():.2f}")
+            
         x = self.transformer.ln_f(x)
 
         if targets is not None:

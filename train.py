@@ -282,8 +282,8 @@ while True:
                     'best_val_loss': best_val_loss,
                     'config': config,
                 }
-                print(f"saving checkpoint to {out_dir}")
-                torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                # print(f"saving checkpoint to {out_dir}")
+                # torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
     if iter_num == 0 and eval_only:
         break
 
@@ -307,6 +307,10 @@ while True:
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    # uncomment for noisy gradient:
+    # for p in model.parameters():
+    #     delta = torch.normal(mean=0, std=0.1, size=p.size(), device=device)
+    #     p.grad += delta
     # step the optimizer and scaler if training in fp16
     scaler.step(optimizer)
     scaler.update()
@@ -330,6 +334,7 @@ while True:
 
     # termination conditions
     if iter_num > max_iters:
+        print(f"max iterations {max_iters} reached, best val loss: {best_val_loss}")
         break
 
 if ddp:
